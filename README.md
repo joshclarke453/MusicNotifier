@@ -20,13 +20,13 @@ Logs all background activity to run_log.txt.
 - A Spotify Developer Account and a registered App.
 
 2. Environment Variables:
-3. 
+   
 Create a .env file in the project root directory (this is gitignored for security):
 SPOTIFY_CLIENT_ID=your_id_here
 SPOTIFY_CLIENT_SECRET=your_secret_here
 REDIRECT_URI=http://localhost:8080
 
-4. Running the Service:
+3. Running the Service:
    
 To run manually:
 
