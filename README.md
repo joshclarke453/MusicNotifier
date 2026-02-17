@@ -1,7 +1,7 @@
 🎧 Spotify Release Tracker
 A background service built in Rust that monitors followed artists and generates local HTML reports when new music is released. Designed to run silently on system startup without hitting Spotify's rate limits.
 
-🚀 How It Works
+🚀 How It Works:
 Syncs your liked artists to a local SQLite database.
 
 Polls artists in "stale" order (the ones not checked in the longest time).
@@ -12,12 +12,12 @@ Generates a timestamped HTML report in /reports only if new music is found.
 
 Logs all background activity to run_log.txt.
 
-🛠 Setup (Local Only)
+🛠 Setup (Local Only):
 1. Prerequisites
 - Rust (Stable 1.85+ for Edition 2024 support)
 - A Spotify Developer Account and a registered App.
 
-2. Environment Variables
+2. Environment Variables:
 Create a .env file in the project root directory (this is gitignored for security):
 SPOTIFY_CLIENT_ID=your_id_here
 SPOTIFY_CLIENT_SECRET=your_secret_here
