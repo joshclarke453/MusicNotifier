@@ -1,0 +1,20 @@
+# --- Rust Defaults ---
+/target
+/Cargo.lock
+
+# --- Secrets & Config ---
+.env
+credentials.json
+
+# --- Local Data ---
+*.db
+*.db-journal
+*.db-wal
+
+# --- Logs & Reports ---
+run_log.txt
+reports/
+
+# --- Local Scripts ---
+*.bat
+*.vbs
