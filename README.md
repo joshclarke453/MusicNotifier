@@ -21,13 +21,13 @@ Logs all background activity to run_log.txt.
 
 2. Environment Variables:
    
-Create a .env file in the project root directory (this is gitignored for security):
-SPOTIFY_CLIENT_ID=your_id_here
-SPOTIFY_CLIENT_SECRET=your_secret_here
-REDIRECT_URI=http://localhost:8080
+- Create a .env file in the project root directory (this is gitignored for security):
+-- SPOTIFY_CLIENT_ID=your_id_here
+-- SPOTIFY_CLIENT_SECRET=your_secret_here
+-- REDIRECT_URI=http://localhost:8080
 
 3. Running the Service:
-   
+
 To run manually:
 
     Bash
