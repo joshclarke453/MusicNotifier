@@ -3,6 +3,7 @@ mod models;
 mod notifications;
 mod spotify;
 
+use chrono::Utc;
 use dotenvy::dotenv;
 use rusqlite::Connection;
 use std::io::{self, Write};
@@ -44,7 +45,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = spotify::SpotifyClient::new(token_data.access_token);
 
-    sync_library(&mut conn, &client).await;
+    let last_sync = db::get_last_library_sync_time(&conn).unwrap_or(None);
+    let now = chrono::Utc::now();
+    let should_sync = match last_sync {
+        Some(time) => (now - time).num_hours() >= 23,
+        None => true,
+    };
+
+    if should_sync {
+        sync_library(&mut conn, &client).await;
+        // You'll need to implement this in your db module to store the timestamp
+        db::update_last_library_sync_time(&conn).ok();
+    } else {
+        notifications::log_and_print("Skipping library sync (already updated within 23h).");
+    }
 
     let stale_artists = get_stale_artists(&conn);
 
@@ -54,14 +68,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         notifications::log_and_print(&format!("Checking Artist: {}", name));
 
         let old_date = db::get_artist_last_release(&conn, &id).unwrap_or_default();
+        notifications::log_and_print(&format!("Latest Release From DB: {}", old_date));
         if old_date.is_empty() {
             // Baseline for new artists to prevent flooding with years of history
-            let today = "2026-02-15";
+            let today = Utc::now().date_naive().format("%Y-%m-%d").to_string();
             notifications::log_and_print(&format!(
                 "First time check for {}. Setting baseline to {}.",
                 name, today
             ));
-            db::update_artist_release(&conn, &id, today).ok();
+            db::update_artist_release(&conn, &id, &today).ok();
             continue;
         }
 
@@ -95,11 +110,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        // Handle 429 Too Many Requests by setting a 23-hour cooldown
+                        if let Some(rate_err) = e.downcast_ref::<models::SpotifyRateLimitError>() {
+                            notifications::log_and_print(&format!(
+                                "Rate limit detected. Grounding script for {} seconds.",
+                                rate_err.retry_after
+                            ));
+                            db::set_cooldown(&conn, rate_err.retry_after).ok();
+                            break;
+                        }
+
                         if let Some(req_err) = e.downcast_ref::<reqwest::Error>() {
                             if req_err.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) {
-                                notifications::log_and_print(&format!("Rate limit detected. Grounding script for 23 hours."));
-                                db::set_cooldown(&conn, 82800).ok();
+                                notifications::log_and_print("Rate limit detected (generic). Grounding for 1 hour.");
+                                db::set_cooldown(&conn, 3600).ok();
                                 break;
                             }
                         }
@@ -117,7 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Anti-bot detection: Randomized delay between artist checks
-        let sleep_time = 5 + rand::random::<u64>() % 10; // Wait between 5 and 15 seconds
+        let sleep_time = 15 + rand::random::<u64>() % 15; // Wait between 15 and 30 seconds
         tokio::time::sleep(tokio::time::Duration::from_secs(sleep_time)).await;
     }
 
@@ -204,24 +227,50 @@ async fn get_token(auth: spotify::SpotifyAuth) -> spotify::SpotifyToken {
 /// * `client` - A reference to the authenticated [`spotify::SpotifyClient`].
 async fn sync_library(conn: &mut Connection, client: &spotify::SpotifyClient) {
     notifications::log_and_print(&format!("Syncing library..."));
-    if let Ok(spotify_artists) = client.get_liked_artists().await {
-        let current_ids: Vec<String> = spotify_artists.iter().map(|a| a.id.clone()).collect();
+    match client.get_liked_artists().await {
+        Ok(spotify_artists) => {
+            let current_ids: Vec<String> = spotify_artists.iter().map(|a| a.id.clone()).collect();
 
-        for artist in &spotify_artists {
-            db::add_artist(&conn, &artist.id, &artist.name).ok();
-        }
-
-        if !current_ids.is_empty() {
-            match db::reconcile_artists(conn, &current_ids) {
-                Ok(count) if count > 0 => {
-                    notifications::log_and_print(&format!(
-                        "Purged {} artists no longer in your library.",
-                        count
-                    ));
-                }
-                Ok(_) => notifications::log_and_print(&format!("Database is perfectly in sync.")),
-                Err(e) => notifications::log_and_print(&format!("Sync cleanup failed: {}", e)),
+            for artist in &spotify_artists {
+                db::add_artist(&conn, &artist.id, &artist.name).ok();
             }
+
+            if !current_ids.is_empty() {
+                match db::reconcile_artists(conn, &current_ids) {
+                    Ok(count) if count > 0 => {
+                        notifications::log_and_print(&format!(
+                            "Purged {} artists no longer in your library.",
+                            count
+                        ));
+                    }
+                    Ok(_) => {
+                        notifications::log_and_print(&format!("Database is perfectly in sync."))
+                    }
+                    Err(e) => notifications::log_and_print(&format!("Sync cleanup failed: {}", e)),
+                }
+            }
+        }
+        Err(e) => {
+            if let Some(rate_err) = e.downcast_ref::<models::SpotifyRateLimitError>() {
+                notifications::log_and_print(&format!(
+                    "Rate limit detected during sync. Grounding for {} seconds.",
+                    rate_err.retry_after
+                ));
+                db::set_cooldown(&conn, rate_err.retry_after).ok();
+                std::process::exit(1);
+            }
+
+            if let Some(req_err) = e.downcast_ref::<reqwest::Error>() {
+                if req_err.is_decode() {
+                    notifications::log_and_print("Failed to decode Spotify response.");
+                }
+                if let Some(status) = req_err.status() {
+                    notifications::log_and_print(&format!("HTTP Error during sync: {}", status));
+                }
+            } else {
+                notifications::log_and_print(&format!("Sync failed: {}", e));
+            }
+            std::process::exit(1);
         }
     }
 }
@@ -236,7 +285,7 @@ async fn sync_library(conn: &mut Connection, client: &spotify::SpotifyClient) {
 ///
 /// A vector of tuples containing (Spotify ID, Artist Name).
 fn get_stale_artists(conn: &Connection) -> Vec<(std::string::String, std::string::String)> {
-    let stale_artists = db::get_stale_artists(&conn, 100).expect("DB Error");
+    let stale_artists = db::get_stale_artists(&conn, 50).expect("DB Error");
     notifications::log_and_print(&format!(
         "Checking {} artists for new music...",
         stale_artists.len()

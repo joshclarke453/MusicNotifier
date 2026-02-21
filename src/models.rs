@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// The top-level response from GET /me/tracks
 #[derive(Debug, Deserialize, Serialize)]
@@ -59,3 +60,16 @@ pub struct SpotifyImage {
     pub height: Option<i32>,
     pub width: Option<i32>,
 }
+
+#[derive(Debug)]
+pub struct SpotifyRateLimitError {
+    pub retry_after: u64,
+}
+
+impl fmt::Display for SpotifyRateLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Spotify Rate Limit: Retry after {}s", self.retry_after)
+    }
+}
+
+impl std::error::Error for SpotifyRateLimitError {}

@@ -1,4 +1,9 @@
-use crate::models::{Album, Artist, ArtistAlbumsResponse, LikedSongsResponse};
+use crate::{
+    models::{
+        self, Album, Artist, ArtistAlbumsResponse, LikedSongsResponse, SpotifyRateLimitError,
+    },
+    notifications,
+};
 use std::collections::HashSet;
 
 /// A client for interacting with the Spotify Web API.
@@ -42,14 +47,14 @@ impl SpotifyClient {
     pub async fn get_all_new_releases(
         &self,
         artist_id: &str,
-        last_checked_date: &str,
+        latest_release_date: &str,
     ) -> Result<Vec<Album>, Box<dyn std::error::Error>> {
         let mut all_found = Vec::new();
         let groups = vec!["album", "single"]; //"appears_on" add this back to the list once I get a solid db going
 
         for group in groups {
             let group_releases = self
-                .fetch_group_releases(artist_id, group, last_checked_date)
+                .fetch_group_releases(artist_id, group, latest_release_date)
                 .await?;
             all_found.extend(group_releases);
         }
@@ -75,11 +80,11 @@ impl SpotifyClient {
         &self,
         artist_id: &str,
         group: &str,
-        last_checked_date: &str,
+        latest_release_date: &str,
     ) -> Result<Vec<Album>, Box<dyn std::error::Error>> {
         let mut group_found = Vec::new();
         let mut next_url = Some(format!(
-            "https://api.spotify.com/v1/artists/{}/albums?limit=50&include_groups={}&market=CA",
+            "https://api.spotify.com/v1/artists/{}/albums?limit=10&include_groups={}",
             artist_id, group
         ));
 
@@ -91,8 +96,23 @@ impl SpotifyClient {
                 .send()
                 .await?;
 
-            if res.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                return Err(res.error_for_status().unwrap_err().into());
+            let status = res.status();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                let wait_seconds = res
+                    .headers()
+                    .get("Retry-After")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(3600); // Default to 1 hour if header is missing
+
+                return Err(Box::new(SpotifyRateLimitError {
+                    retry_after: wait_seconds,
+                }));
+            }
+
+            if !status.is_success() {
+                let err_body = res.text().await?;
+                return Err(format!("API Error: Status {}. Body: {}", status, err_body).into());
             }
 
             let text = res.text().await?;
@@ -100,8 +120,8 @@ impl SpotifyClient {
             let data: ArtistAlbumsResponse = match serde_json::from_str(&text) {
                 Ok(d) => d,
                 Err(e) => {
-                    println!("JSON Error: {}", e);
-                    println!("RAW BODY: {}", text);
+                    notifications::log_and_print(&format!("JSON Error: {}", e));
+                    notifications::log_and_print(&format!("RAW BODY: {}", text));
                     return Err(e.into());
                 }
             };
@@ -113,7 +133,7 @@ impl SpotifyClient {
             let mut page_has_old_content = false;
 
             for album in data.items {
-                if album.release_date <= last_checked_date.to_string() {
+                if album.release_date <= latest_release_date.to_string() {
                     page_has_old_content = true;
                     continue;
                 }
@@ -133,6 +153,10 @@ impl SpotifyClient {
             } else {
                 next_url = None;
             }
+
+            // Anti-bot detection: Randomized delay between artist checks
+            let sleep_time = 5 + rand::random::<u64>() % 10; // Wait between 5 and 15 seconds
+            tokio::time::sleep(tokio::time::Duration::from_secs(sleep_time)).await;
         }
         Ok(group_found)
     }
@@ -159,7 +183,7 @@ impl SpotifyClient {
     /// ### Errors
     ///
     /// Returns an error if the network request fails or if Spotify returns a 429 Rate Limit.
-    pub async fn get_liked_artists(&self) -> Result<Vec<Artist>, reqwest::Error> {
+    pub async fn get_liked_artists(&self) -> Result<Vec<Artist>, Box<dyn std::error::Error>> {
         let mut artists = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
 
@@ -178,19 +202,22 @@ impl SpotifyClient {
 
             if !response.status().is_success() {
                 if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    let retry_after = response
+                    let wait_seconds = response
                         .headers()
                         .get("Retry-After")
                         .and_then(|h| h.to_str().ok())
-                        .unwrap_or("unknown");
-                    println!(
-                        "Sync Blocked: Spotify Rate Limit. Wait {} seconds.",
-                        retry_after
-                    );
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(3600);
+                    return Err(Box::new(models::SpotifyRateLimitError {
+                        retry_after: wait_seconds,
+                    }));
                 } else {
-                    println!("Sync Error: Spotify returned status {}", response.status());
+                    notifications::log_and_print(&format!(
+                        "Sync Error: Spotify returned status {}",
+                        response.status()
+                    ));
                 }
-                return Err(response.error_for_status().unwrap_err());
+                return Err(response.error_for_status().unwrap_err().into());
             }
 
             let data = response.json::<LikedSongsResponse>().await?;
@@ -206,10 +233,12 @@ impl SpotifyClient {
 
             next_url = data.next;
 
-            println!(
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            notifications::log_and_print(&format!(
                 "Checked a page... found {} unique artists so far",
                 artists.len()
-            );
+            ));
         }
 
         Ok(artists)

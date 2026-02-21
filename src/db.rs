@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Result};
 
+use crate::notifications;
+
 /// Creates the SQLite db file if it doesnt exist, then creates the artists and new releases table.
 ///
 /// ### Errors
@@ -79,7 +81,7 @@ pub fn add_artist(conn: &Connection, id: &str, name: &str) -> Result<()> {
 ///
 /// This function will return an error if the database update execution fails.
 pub fn update_artist_release(conn: &Connection, id: &str, date: &str) -> rusqlite::Result<()> {
-    println!("Newest Release Date: {}", date);
+    notifications::log_and_print(&format!("Newest Release Date: {}", date));
     conn.execute(
         "UPDATE artists 
          SET latest_release_date = ?, 
@@ -312,7 +314,7 @@ pub fn reconcile_artists(conn: &mut Connection, current_ids: &[String]) -> Resul
 
     // 1. Create a lightweight temporary table
     tx.execute(
-        "CREATE TEMPORARY TABLE current_sync (id TEXT PRIMARY KEY) ON COMMIT DROP",
+        "CREATE TEMPORARY TABLE current_sync (id TEXT PRIMARY KEY)",
         [],
     )?;
 
@@ -399,4 +401,44 @@ pub fn get_pending_notifications_count(conn: &Connection) -> Result<i64> {
         |row| row.get(0),
     )?;
     Ok(count)
+}
+
+/// Retrieves the timestamp of the last library sync from the sync_status table.
+///
+/// ### Arguments
+///
+/// * `conn` - Database connection object.
+pub fn get_last_library_sync_time(conn: &Connection) -> Result<Option<DateTime<Utc>>> {
+    let res: Option<String> = conn
+        .query_row(
+            "SELECT value FROM sync_status WHERE key = 'last_library_sync'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    match res {
+        Some(s) => {
+            let format = "%Y-%m-%d %H:%M:%S %z";
+            let datetime_str = format!("{} +0000", s);
+            Ok(DateTime::parse_from_str(&datetime_str, format)
+                .map(|dt| dt.with_timezone(&Utc))
+                .ok())
+        }
+        None => Ok(None),
+    }
+}
+
+/// Updates the 'last_library_sync' key to the current database time.
+///
+/// ### Arguments
+///
+/// * `conn` - Database connection object.
+pub fn update_last_library_sync_time(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO sync_status (key, value) 
+         VALUES ('last_library_sync', datetime('now'))",
+        [],
+    )?;
+    Ok(())
 }
