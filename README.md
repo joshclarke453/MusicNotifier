@@ -1,4 +1,4 @@
-Spotify essentially killed this project with their February 2026 API changes. It technically works, but will receive constant 24hr rate limit timeouts from spotify which are unavoidable even when putting in massive delays between API calls. Seems like Spotify has either implemented some form of scraping detection which this program triggers, or a set limit on how many API requests a program can make a day.
+Spotify essentially killed this project with their February 2026 API changes. It technically works, but will receive constant 24hr rate limit timeouts from spotify which are unavoidable even when putting in massive delays between API calls. Seems like Spotify has either implemented some form of scraping detection which this program triggers, or a set limit on how many API requests a program in development mode can make a day, and to not be indevelopment mode, you need 250,000 active users, which is unachievable for this project.
 
 🎧 Spotify Release Tracker:
 
