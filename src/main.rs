@@ -113,9 +113,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(rate_err) = e.downcast_ref::<models::SpotifyRateLimitError>() {
                             notifications::log_and_print(&format!(
                                 "Rate limit detected. Grounding script for {} seconds.",
-                                rate_err.retry_after
+                                rate_err.retry_after + 1
                             ));
-                            db::set_cooldown(&conn, rate_err.retry_after).ok();
+                            db::set_cooldown(&conn, rate_err.retry_after + 1).ok();
                             break;
                         }
 
@@ -140,7 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Anti-bot detection: Randomized delay between artist checks
-        let sleep_time = 15 + rand::random::<u64>() % 15; // Wait between 15 and 30 seconds
+        let sleep_time = 20 + rand::random::<u64>() % 20; // Wait between 20 and 40 seconds
         tokio::time::sleep(tokio::time::Duration::from_secs(sleep_time)).await;
     }
 
@@ -162,21 +162,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// Returns a valid [`spotify::SpotifyToken`] ready for API use.
 async fn get_token(auth: spotify::SpotifyAuth) -> spotify::SpotifyToken {
-    let token_data = if let Some(mut saved_tokens) = spotify::SpotifyAuth::load_tokens() {
-        let test_client = spotify::SpotifyClient::new(saved_tokens.access_token.clone());
-        match test_client.verify_token().await {
-            Ok(_) => saved_tokens,
+    if let Some(mut saved_tokens) = spotify::SpotifyAuth::load_tokens() {
+        let client = spotify::SpotifyClient::new(saved_tokens.access_token.clone());
+
+        match client.verify_token().await {
+            Ok(_) => return saved_tokens, // Token is still good!
             Err(_) => {
-                notifications::log_and_print(&format!("Refreshing access token..."));
-                let refresh_val = saved_tokens
+                notifications::log_and_print("Access token expired. Refreshing...");
+
+                // 1. Get the current refresh token string
+                let refresh_handle = saved_tokens
                     .refresh_token
                     .as_ref()
-                    .expect("No refresh token");
-                match auth.refresh_token(refresh_val).await {
+                    .expect("No refresh token found!");
+
+                // 2. Call the Spotify API (this returns a NEW SpotifyToken object)
+                match auth.refresh_token(refresh_handle).await {
                     Ok(new_token_data) => {
+                        // 3. THIS IS THE MISSING LINK:
+                        // Call your update function to merge the new access token
+                        // while keeping the old refresh token if a new one wasn't sent.
                         saved_tokens.update_from_refresh(new_token_data);
+
+                        // 4. Save the updated struct back to credentials.json
                         spotify::SpotifyAuth::save_tokens(&saved_tokens);
-                        saved_tokens
+
+                        notifications::log_and_print("Token refreshed and saved successfully.");
+                        return saved_tokens;
                     }
                     Err(_) => {
                         notifications::log_and_print(&format!(
@@ -192,28 +204,29 @@ async fn get_token(auth: spotify::SpotifyAuth) -> spotify::SpotifyToken {
                             .await
                             .expect("Failed to get token");
                         spotify::SpotifyAuth::save_tokens(&tokens);
-                        tokens
+                        return tokens;
                     }
                 }
             }
         }
-    } else {
-        notifications::log_and_print(&format!(
-            "Authorization required: {}",
-            auth.get_authorize_url()
-        ));
-        notifications::log_and_print(&format!("Paste code: "));
-        io::stdout().flush().unwrap();
-        let mut code = String::new();
-        io::stdin().read_line(&mut code).unwrap();
-        let tokens = auth
-            .get_token(code.trim())
-            .await
-            .expect("Failed to get token");
-        spotify::SpotifyAuth::save_tokens(&tokens);
-        tokens
-    };
-    return token_data;
+    }
+
+    // --- Fallback to Manual Authorization ---
+    notifications::log_and_print(&format!("Please authorize: {}", auth.get_authorize_url()));
+    print!("Paste the code from the URL: ");
+    io::stdout().flush().unwrap();
+
+    let mut code = String::new();
+    io::stdin().read_line(&mut code).unwrap();
+    let code = code.trim();
+
+    match auth.get_token(code).await {
+        Ok(tokens) => {
+            spotify::SpotifyAuth::save_tokens(&tokens);
+            tokens
+        }
+        Err(e) => panic!("Full authentication failed: {}", e),
+    }
 }
 
 /// Syncs the local database with the user's current Spotify liked artists.
@@ -254,9 +267,9 @@ async fn sync_library(conn: &mut Connection, client: &spotify::SpotifyClient) {
             if let Some(rate_err) = e.downcast_ref::<models::SpotifyRateLimitError>() {
                 notifications::log_and_print(&format!(
                     "Rate limit detected during sync. Grounding for {} seconds.",
-                    rate_err.retry_after
+                    rate_err.retry_after + 1
                 ));
-                db::set_cooldown(&conn, rate_err.retry_after).ok();
+                db::set_cooldown(&conn, rate_err.retry_after + 1).ok();
                 std::process::exit(1);
             }
 

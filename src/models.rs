@@ -68,7 +68,11 @@ pub struct SpotifyRateLimitError {
 
 impl fmt::Display for SpotifyRateLimitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Spotify Rate Limit: Retry after {}s", self.retry_after)
+        write!(
+            f,
+            "Spotify Rate Limit: Retry after {}s",
+            self.retry_after + 1
+        )
     }
 }
 

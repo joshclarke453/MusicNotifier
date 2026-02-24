@@ -4,6 +4,7 @@ use crate::{
     },
     notifications,
 };
+use reqwest::header::{HeaderValue, ACCEPT_LANGUAGE, AUTHORIZATION, USER_AGENT};
 use std::collections::HashSet;
 
 /// A client for interacting with the Spotify Web API.
@@ -89,12 +90,17 @@ impl SpotifyClient {
         ));
 
         while let Some(ref url) = next_url {
-            let res = self
-                .client
+            let res = self.client
                 .get(url)
-                .header("Authorization", format!("Bearer {}", self.access_token))
-                .send()
-                .await?;
+                .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
+                .header(
+                    USER_AGENT,
+                    HeaderValue::from_static(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                    )
+                )
+                .header(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"))
+                .send().await?;
 
             let status = res.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -106,7 +112,7 @@ impl SpotifyClient {
                     .unwrap_or(3600); // Default to 1 hour if header is missing
 
                 return Err(Box::new(SpotifyRateLimitError {
-                    retry_after: wait_seconds,
+                    retry_after: wait_seconds + 1,
                 }));
             }
 
@@ -155,7 +161,7 @@ impl SpotifyClient {
             }
 
             // Anti-bot detection: Randomized delay between artist checks
-            let sleep_time = 5 + rand::random::<u64>() % 10; // Wait between 5 and 15 seconds
+            let sleep_time = 10 + (rand::random::<u64>() % 15); // Wait between 5 and 15 seconds
             tokio::time::sleep(tokio::time::Duration::from_secs(sleep_time)).await;
         }
         Ok(group_found)
@@ -169,9 +175,15 @@ impl SpotifyClient {
     pub async fn verify_token(&self) -> Result<(), reqwest::Error> {
         self.client
             .get("https://api.spotify.com/v1/me")
-            .header("Authorization", format!("Bearer {}", self.access_token))
-            .send()
-            .await?
+            .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
+            .header(
+                USER_AGENT,
+                HeaderValue::from_static(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                )
+            )
+            .header(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"))
+            .send().await?
             .error_for_status()?;
         Ok(())
     }
@@ -190,15 +202,17 @@ impl SpotifyClient {
         let mut next_url = Some("https://api.spotify.com/v1/me/tracks?limit=50".to_string());
 
         while let Some(url) = next_url {
-            let response = self
-                .client
+            let response = self.client
                 .get(&url)
+                .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
                 .header(
-                    reqwest::header::AUTHORIZATION,
-                    format!("Bearer {}", self.access_token),
+                    USER_AGENT,
+                    HeaderValue::from_static(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                    )
                 )
-                .send()
-                .await?;
+                .header(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"))
+                .send().await?;
 
             if !response.status().is_success() {
                 if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -209,7 +223,7 @@ impl SpotifyClient {
                         .and_then(|s| s.parse::<u64>().ok())
                         .unwrap_or(3600);
                     return Err(Box::new(models::SpotifyRateLimitError {
-                        retry_after: wait_seconds,
+                        retry_after: wait_seconds + 1,
                     }));
                 } else {
                     notifications::log_and_print(&format!(
@@ -233,7 +247,8 @@ impl SpotifyClient {
 
             next_url = data.next;
 
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let sleep_time = 3 + (rand::random::<u64>() % 2); // Wait between 3 and 5 seconds
+            tokio::time::sleep(tokio::time::Duration::from_secs(sleep_time)).await;
 
             notifications::log_and_print(&format!(
                 "Checked a page... found {} unique artists so far",
