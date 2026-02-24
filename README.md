@@ -1,3 +1,5 @@
+Spotify essentially killed this project with their February 2026 API changes. It technically works, but will receive constant 24hr rate limit timeouts from spotify which are unavoidable even when putting in massive delays between API calls. Seems like Spotify has either implemented some form of scraping detection which this program triggers, or a set limit on how many API requests a program can make a day.
+
 🎧 Spotify Release Tracker:
 
 A background service built in Rust that monitors followed artists and generates local HTML reports when new music is released. Designed to run silently on system startup without hitting Spotify's rate limits.
