@@ -166,25 +166,19 @@ async fn get_token(auth: spotify::SpotifyAuth) -> spotify::SpotifyToken {
         let client = spotify::SpotifyClient::new(saved_tokens.access_token.clone());
 
         match client.verify_token().await {
-            Ok(_) => return saved_tokens, // Token is still good!
+            Ok(_) => return saved_tokens,
             Err(_) => {
                 notifications::log_and_print("Access token expired. Refreshing...");
 
-                // 1. Get the current refresh token string
                 let refresh_handle = saved_tokens
                     .refresh_token
                     .as_ref()
                     .expect("No refresh token found!");
 
-                // 2. Call the Spotify API (this returns a NEW SpotifyToken object)
                 match auth.refresh_token(refresh_handle).await {
                     Ok(new_token_data) => {
-                        // 3. THIS IS THE MISSING LINK:
-                        // Call your update function to merge the new access token
-                        // while keeping the old refresh token if a new one wasn't sent.
                         saved_tokens.update_from_refresh(new_token_data);
 
-                        // 4. Save the updated struct back to credentials.json
                         spotify::SpotifyAuth::save_tokens(&saved_tokens);
 
                         notifications::log_and_print("Token refreshed and saved successfully.");
